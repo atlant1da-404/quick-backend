@@ -56,7 +56,7 @@ func (a apiHandler) getNote(ctx *fasthttp.RequestCtx) ([]byte, error) {
 		return nil, WrongRequestNoteIDErr
 	}
 
-	note, err := a.uc.GetNote(ctx, &model.NoteGet{Id: noteID})
+	note, err := a.uc.GetNote(ctx, model.NoteGet{Id: noteID})
 	if err != nil {
 		return nil, fmt.Errorf("a.uc.GetNote: %w", err)
 	}
