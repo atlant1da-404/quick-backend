@@ -68,7 +68,7 @@ func main() {
 
 	// Run the server in a separate goroutine
 	go func() {
-		if err := http.ListenAndServe(":8080"); err != nil {
+		if err := http.ListenAndServe(config.Server.Port); err != nil {
 			log.Fatalf("HTTP server ListenAndServe failed: %v", err)
 		}
 	}()

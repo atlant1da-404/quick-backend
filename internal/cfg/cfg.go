@@ -9,6 +9,7 @@ import (
 
 type (
 	Config struct {
+		Server    Server
 		DragonFly DragonFly
 	}
 
