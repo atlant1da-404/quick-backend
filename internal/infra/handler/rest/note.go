@@ -25,7 +25,7 @@ var notePool = sync.Pool{
 
 var batchPool = sync.Pool{
 	New: func() any {
-		b := make([]*model.NoteCreate, 0, 1000) // заміни на свій maxBatch
+		b := make([]*model.NoteCreate, 0, 1000)
 		return &b
 	},
 }
@@ -63,9 +63,7 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 
 	select {
 	case a.flushChan <- note:
-		// все ок
 	default:
-		// канал переповнений, повертаємо Note в пул
 		note.Id = ""
 		note.Title = ""
 		notePool.Put(note)
@@ -81,10 +79,9 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// беремо батч з пулу
 	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
 	batch := *batchPtr
-	batch = batch[:0] // очищаємо перед використанням
+	batch = batch[:0]
 
 	ticker := time.NewTicker(a.flushDur)
 	defer ticker.Stop()
@@ -92,7 +89,6 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-ctx.Done():
-			// дренимо канал і flush перед виходом
 			for {
 				select {
 				case note := <-a.flushChan:
@@ -105,8 +101,7 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 					if len(batch) > 0 {
 						a.flush(batch)
 					}
-					// повертаємо батч в пул
-					*batchPtr = batch[:0] // очистимо перед поверненням
+					*batchPtr = batch[:0]
 					batchPool.Put(batchPtr)
 					return
 				}
