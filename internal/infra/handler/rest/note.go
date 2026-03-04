@@ -1,70 +1,102 @@
 package rest
 
 import (
-	"errors"
-	"fmt"
+	"context"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/bytedance/sonic"
+	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/valyala/fasthttp"
 
 	"github.com/atlant1da-404/internal/model"
-)
-
-var (
-	WrongRequestNoteIDErr = errors.New("wrong request note_id")
 )
 
 type createNoteRequestBody struct {
 	Title string `json:"title"`
 }
 
-// notePool comments:
-// Use a buffer pool to reduce memory allocations.
-// Before unmarshalling, grab an item from the pool and put it back after you're done.
-var notePool = sync.Pool{
-	New: func() interface{} {
-		return &createNoteRequestBody{}
-	},
+const noteRequestLimit = 512
+
+func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
+	body := ctx.Request.Body()
+	if len(body) > noteRequestLimit {
+		ctx.SetStatusCode(fasthttp.StatusRequestEntityTooLarge)
+		return nil
+	}
+
+	var req createNoteRequestBody
+	if err := sonic.Unmarshal(body, &req); err != nil {
+		ctx.SetStatusCode(fasthttp.StatusBadRequest)
+		return nil
+	}
+
+	if strings.TrimSpace(req.Title) == "" {
+		ctx.SetStatusCode(fasthttp.StatusBadRequest)
+		return nil
+	}
+
+	id, err := gonanoid.New()
+	if err != nil {
+		ctx.SetStatusCode(fasthttp.StatusInternalServerError)
+		return nil
+	}
+
+	select {
+	case a.flushChan <- &model.NoteCreate{Id: id, Title: req.Title}:
+	default:
+		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
+		return nil
+	}
+
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	return nil
 }
 
-func (a apiHandler) createNote(ctx *fasthttp.RequestCtx) ([]byte, error) {
-	note := notePool.Get().(*createNoteRequestBody)
-	defer notePool.Put(note)
+func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	err := sonic.Unmarshal(ctx.Request.Body(), note)
-	if err != nil {
-		return nil, fmt.Errorf("sonic.Unmarshal: %w", err)
+	batch := make([]*model.NoteCreate, 0, a.maxBatch)
+	ticker := time.NewTicker(a.flushDur)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			for {
+				select {
+				case note := <-a.flushChan:
+					batch = append(batch, note)
+					if len(batch) >= a.maxBatch {
+						a.flush(batch)
+						batch = batch[:0]
+					}
+				default:
+					if len(batch) > 0 {
+						a.flush(batch)
+					}
+					return
+				}
+			}
+
+		case note := <-a.flushChan:
+			batch = append(batch, note)
+
+			if len(batch) >= a.maxBatch {
+				a.flush(batch)
+				batch = batch[:0]
+			}
+
+		case <-ticker.C:
+			if len(batch) > 0 {
+				a.flush(batch)
+				batch = batch[:0]
+			}
+		}
 	}
-
-	resp, err := a.uc.CreateNote(ctx, &model.NoteCreate{Title: note.Title})
-	if err != nil {
-		return nil, fmt.Errorf("a.uc.CreateNote: %w", err)
-	}
-
-	data, err := sonic.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("sonic.Marshal: %w", err)
-	}
-
-	return data, nil
 }
 
-func (a apiHandler) getNote(ctx *fasthttp.RequestCtx) ([]byte, error) {
-	noteID, ok := ctx.UserValue("note_id").(string)
-	if !ok {
-		return nil, WrongRequestNoteIDErr
-	}
-
-	note, err := a.uc.GetNote(ctx, model.NoteGet{Id: noteID})
-	if err != nil {
-		return nil, fmt.Errorf("a.uc.GetNote: %w", err)
-	}
-
-	data, err := sonic.Marshal(note)
-	if err != nil {
-		return nil, fmt.Errorf("sonic.Marshal: %w", err)
-	}
-
-	return data, nil
+func (a *apiHandler) flush(notes []*model.NoteCreate) {
+	a.uc.CreateNotesBatch(notes)
 }

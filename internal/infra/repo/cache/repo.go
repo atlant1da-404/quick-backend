@@ -1,24 +1,12 @@
 package cache
 
-import (
-	"context"
-	"time"
-)
-
-type (
-	DragonFlyClient interface {
-		Set(ctx context.Context, key string, value any, expiration time.Duration) error
-		GetBytes(ctx context.Context, key string) ([]byte, error)
-	}
-)
+import "github.com/dgraph-io/ristretto"
 
 type Repository struct {
-	dfClient DragonFlyClient
+	r *ristretto.Cache
 }
 
 // New creates a new Dragonfly repository.
-func New(dfClient DragonFlyClient) *Repository {
-	return &Repository{
-		dfClient: dfClient,
-	}
+func New(r *ristretto.Cache) *Repository {
+	return &Repository{r: r}
 }

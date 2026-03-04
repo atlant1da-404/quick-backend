@@ -1,52 +1,42 @@
 package main
 
 import (
+	"context"
+	"github.com/dgraph-io/ristretto"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/valyala/fasthttp"
 
 	"github.com/atlant1da-404/internal/cfg"
-	"github.com/atlant1da-404/internal/infra/client/dragonfly"
 	"github.com/atlant1da-404/internal/infra/handler/rest"
 	"github.com/atlant1da-404/internal/infra/repo/cache"
 	"github.com/atlant1da-404/internal/usecase"
 )
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := &sync.WaitGroup{}
+
 	config, err := cfg.NewConfig()
 	if err != nil {
 		log.Fatalf("cfg.NewConfig(): %s", err.Error())
 		return
 	}
 
-	dfClient, err := dragonfly.New(
-		dragonfly.WithAddress(config.DragonFly.Address),
-		dragonfly.WithPassword(config.DragonFly.Password),
-		dragonfly.WithDB(config.DragonFly.DB),
-		dragonfly.WithReadTimeout(config.DragonFly.ReadTimeout),
-		dragonfly.WithWriteTimeout(config.DragonFly.WriteTimeout),
-		dragonfly.WithMaxRetries(config.DragonFly.MaxRetries),
-		dragonfly.WithMinRetryBackoff(config.DragonFly.MinRetryBackoff),
-		dragonfly.WithMaxRetryBackoff(config.DragonFly.MaxRetryBackoff),
-	)
-	if err != nil {
-		log.Fatalf("dragonfly.New: %s", err.Error())
-		return
-	}
-	defer func() {
-		if err := dfClient.Close(); err != nil {
-			log.Fatalf("app.Run - dfClient.Close: %s", err.Error())
-			return
-		}
-	}()
+	rCache, err := ristretto.NewCache(&ristretto.Config{
+		NumCounters: 10_000_000,
+		MaxCost:     256 << 20,
+		BufferItems: 64,
+	})
 
-	repo := cache.New(dfClient)
+	repo := cache.New(rCache)
 	uc := usecase.NewUsecase(repo)
-	apiHandler := rest.NewAPIHandler(uc)
+	apiHandler := rest.NewAPIHandler(ctx, uc, 64, 1*time.Millisecond, wg)
 
 	http := &fasthttp.Server{
 		Handler: apiHandler.Router,
@@ -77,10 +67,17 @@ func main() {
 	sigReceived := <-signalChan
 	log.Printf("Received signal: %s. Initiating graceful shutdown...", sigReceived)
 
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
 	// Attempt graceful shutdown
-	if err := http.Shutdown(); err != nil {
+	if err := http.ShutdownWithContext(shutdownCtx); err != nil {
 		log.Fatalf("HTTP server Shutdown failed: %v", err)
 	} else {
 		log.Println("HTTP server successfully shut down")
 	}
+
+	cancel()
+
+	wg.Wait()
 }

@@ -2,41 +2,45 @@ package rest
 
 import (
 	"context"
-	"fmt"
-
-	"github.com/valyala/fasthttp"
-
 	"github.com/atlant1da-404/internal/model"
+	"github.com/dgraph-io/ristretto"
+	"sync"
+	"time"
 )
 
 type (
 	Usecase interface {
-		CreateNote(ctx context.Context, dto *model.NoteCreate) (*model.Note, error)
-		GetNote(ctx context.Context, filter model.NoteGet) (*model.Note, error)
+		CreateNotesBatch(notes []*model.NoteCreate)
 	}
-	apiHandlerType = func(ctx *fasthttp.RequestCtx) ([]byte, error)
 )
 
 type apiHandler struct {
-	uc Usecase
+	uc        Usecase
+	cache     *ristretto.Cache
+	flushChan chan *model.NoteCreate
+	maxBatch  int
+	flushDur  time.Duration
 }
 
-func NewAPIHandler(uc Usecase) *apiHandler {
-	return &apiHandler{
-		uc: uc,
-	}
-}
+func NewAPIHandler(
+	ctx context.Context,
+	uc Usecase,
+	maxBatch int,
+	flushDur time.Duration,
+	wg *sync.WaitGroup,
+) *apiHandler {
 
-func (a apiHandler) wrapperHandler(handler apiHandlerType) fasthttp.RequestHandler {
-	return func(ctx *fasthttp.RequestCtx) {
-		res, err := handler(ctx)
-		if err != nil {
-			fmt.Fprintf(ctx, "Something wrong: :(")
-			return
-		}
-
-		ctx.SetStatusCode(fasthttp.StatusOK)
-		ctx.SetContentType("application/json")
-		ctx.SetBody(res)
+	h := &apiHandler{
+		uc:        uc,
+		flushChan: make(chan *model.NoteCreate, 200_000),
+		maxBatch:  maxBatch,
+		flushDur:  flushDur,
 	}
+
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go h.worker(ctx, wg)
+	}
+
+	return h
 }
