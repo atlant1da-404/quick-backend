@@ -25,7 +25,7 @@ var notePool = sync.Pool{
 
 var batchPool = sync.Pool{
 	New: func() any {
-		b := make([]*model.NoteCreate, 0, 1000)
+		b := make([]*model.NoteCreate, 0, 2000)
 		return &b
 	},
 }
