@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bytedance/sonic"
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -25,7 +24,7 @@ var notePool = sync.Pool{
 
 var batchPool = sync.Pool{
 	New: func() any {
-		b := make([]*model.NoteCreate, 0, 2000)
+		b := make([]*model.NoteCreate, 0, 2000) // під maxBatch
 		return &b
 	},
 }
@@ -56,7 +55,6 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 		return nil
 	}
 
-	// беремо Note з пулу
 	note := notePool.Get().(*model.NoteCreate)
 	note.Id = id
 	note.Title = req.Title
@@ -80,11 +78,8 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
-	batch := *batchPtr
-	batch = batch[:0]
-
-	ticker := time.NewTicker(a.flushDur)
-	defer ticker.Stop()
+	*batchPtr = (*batchPtr)[:0] // reset
+	batch := batchPtr
 
 	for {
 		select {
@@ -92,32 +87,26 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 			for {
 				select {
 				case note := <-a.flushChan:
-					batch = append(batch, note)
-					if len(batch) >= a.maxBatch {
-						a.flush(batch)
-						batch = batch[:0]
+					*batch = append(*batch, note)
+					if len(*batch) >= a.maxBatch {
+						a.flush(*batch)
+						*batch = (*batch)[:0]
 					}
 				default:
-					if len(batch) > 0 {
-						a.flush(batch)
+					if len(*batch) > 0 {
+						a.flush(*batch)
 					}
-					*batchPtr = batch[:0]
-					batchPool.Put(batchPtr)
+					*batch = (*batch)[:0]
+					batchPool.Put(batch)
 					return
 				}
 			}
 
 		case note := <-a.flushChan:
-			batch = append(batch, note)
-			if len(batch) >= a.maxBatch {
-				a.flush(batch)
-				batch = batch[:0]
-			}
-
-		case <-ticker.C:
-			if len(batch) > 0 {
-				a.flush(batch)
-				batch = batch[:0]
+			*batch = append(*batch, note)
+			if len(*batch) >= a.maxBatch {
+				a.flush(*batch)
+				*batch = (*batch)[:0]
 			}
 		}
 	}
