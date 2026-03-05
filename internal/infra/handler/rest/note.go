@@ -26,8 +26,6 @@ var (
 	requestPool = sync.Pool{
 		New: func() any { return &createNoteRequestBody{} },
 	}
-
-	sem = make(chan struct{}, 10000)
 )
 
 type createNoteRequestBody struct {
@@ -39,14 +37,11 @@ func (c *createNoteRequestBody) Reset() {
 }
 
 func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
-	// concurrency rate limiter
-	select {
-	case sem <- struct{}{}:
-		defer func() { <-sem }()
-	default:
+	if !a.semaphore.Acquire() {
 		ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
 		return nil
 	}
+	defer a.semaphore.Release()
 
 	body := ctx.Request.Body()
 	if len(body) <= noteRequestMin {
