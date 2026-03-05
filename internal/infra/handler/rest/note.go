@@ -3,10 +3,8 @@ package rest
 import (
 	"context"
 	"github.com/rs/xid"
-	"sync"
-	"time"
-
 	"github.com/valyala/fasthttp"
+	"sync"
 
 	"github.com/atlant1da-404/internal/model"
 )
@@ -94,13 +92,6 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
 	batch := *batchPtr
 
-	ticker := time.NewTicker(a.flushDur)
-	defer func() {
-		ticker.Stop()
-		*batchPtr = batch[:0]
-		batchPool.Put(batchPtr)
-	}()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,12 +106,6 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 			}
 			batch = append(batch, note)
 			if len(batch) >= a.maxBatch {
-				a.flush(batch)
-				batch = batch[:0]
-			}
-
-		case <-ticker.C:
-			if len(batch) > 0 {
 				a.flush(batch)
 				batch = batch[:0]
 			}
