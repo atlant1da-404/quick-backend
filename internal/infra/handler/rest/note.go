@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/rs/xid"
 	"sync"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -13,7 +14,7 @@ import (
 const (
 	noteRequestMin   = 5
 	noteRequestLimit = 512
-	batchPoolLenght  = 2000
+	batchPoolLength  = 2000
 )
 
 var (
@@ -25,6 +26,13 @@ var (
 
 	requestPool = sync.Pool{
 		New: func() any { return &createNoteRequestBody{} },
+	}
+
+	batchPool = sync.Pool{
+		New: func() any {
+			b := make([]*model.NoteCreate, 0, batchPoolLength)
+			return &b
+		},
 	}
 )
 
@@ -82,7 +90,16 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 
 func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	batch := make([]*model.NoteCreate, 0, batchPoolLenght)
+
+	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
+	batch := *batchPtr
+
+	ticker := time.NewTicker(a.flushDur)
+	defer func() {
+		ticker.Stop()
+		*batchPtr = batch[:0]
+		batchPool.Put(batchPtr)
+	}()
 
 	for {
 		select {
@@ -92,9 +109,18 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 			}
 			return
 
-		case note := <-a.flushChan:
+		case note, ok := <-a.flushChan:
+			if !ok {
+				return
+			}
 			batch = append(batch, note)
 			if len(batch) >= a.maxBatch {
+				a.flush(batch)
+				batch = batch[:0]
+			}
+
+		case <-ticker.C:
+			if len(batch) > 0 {
 				a.flush(batch)
 				batch = batch[:0]
 			}

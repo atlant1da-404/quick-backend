@@ -40,7 +40,7 @@ func main() {
 
 	repo := cache.New(rCache)
 	uc := usecase.NewUsecase(repo)
-	apiHandler := rest.NewAPIHandler(ctx, sonic, uc, 2000, 1*time.Millisecond, wg)
+	apiHandler := rest.NewAPIHandler(ctx, sonic, uc, 2000, 200*time.Millisecond, wg)
 
 	http := &fasthttp.Server{
 		Handler: apiHandler.Router,
