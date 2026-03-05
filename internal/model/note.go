@@ -9,3 +9,8 @@ type NoteCreate struct {
 	Id    string
 	Title string
 }
+
+func (n *NoteCreate) Reset() {
+	n.Id = ""
+	n.Title = ""
+}

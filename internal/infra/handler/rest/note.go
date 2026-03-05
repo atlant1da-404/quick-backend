@@ -2,34 +2,41 @@ package rest
 
 import (
 	"context"
-	"strings"
+	"github.com/rs/xid"
 	"sync"
 
 	"github.com/bytedance/sonic"
-	gonanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/valyala/fasthttp"
 
 	"github.com/atlant1da-404/internal/model"
+)
+
+const noteRequestLimit = 512
+
+var (
+	notePool = sync.Pool{
+		New: func() any { return &model.NoteCreate{} },
+	}
+
+	batchPool = sync.Pool{
+		New: func() any {
+			b := make([]*model.NoteCreate, 0, 2000)
+			return &b
+		},
+	}
+
+	requestPool = sync.Pool{
+		New: func() any { return &createNoteRequestBody{} },
+	}
 )
 
 type createNoteRequestBody struct {
 	Title string `json:"title"`
 }
 
-var notePool = sync.Pool{
-	New: func() any {
-		return &model.NoteCreate{}
-	},
+func (c *createNoteRequestBody) Reset() {
+	c.Title = ""
 }
-
-var batchPool = sync.Pool{
-	New: func() any {
-		b := make([]*model.NoteCreate, 0, 2000) // під maxBatch
-		return &b
-	},
-}
-
-const noteRequestLimit = 512
 
 func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	body := ctx.Request.Body()
@@ -38,72 +45,51 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 		return nil
 	}
 
-	var req createNoteRequestBody
-	if err := sonic.Unmarshal(body, &req); err != nil {
-		ctx.SetStatusCode(fasthttp.StatusBadRequest)
-		return nil
-	}
+	req := requestPool.Get().(*createNoteRequestBody)
+	req.Reset()
 
-	if strings.TrimSpace(req.Title) == "" {
+	if err := sonic.Unmarshal(body, req); err != nil || len(req.Title) == 0 {
+		requestPool.Put(req)
 		ctx.SetStatusCode(fasthttp.StatusBadRequest)
-		return nil
-	}
-
-	id, err := gonanoid.New()
-	if err != nil {
-		ctx.SetStatusCode(fasthttp.StatusInternalServerError)
 		return nil
 	}
 
 	note := notePool.Get().(*model.NoteCreate)
-	note.Id = id
 	note.Title = req.Title
+
+	requestPool.Put(req)
 
 	select {
 	case a.flushChan <- note:
+		ctx.SetStatusCode(fasthttp.StatusOK)
 	default:
-		note.Id = ""
-		note.Title = ""
+		note.Reset()
 		notePool.Put(note)
-
 		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
-		return nil
 	}
 
-	ctx.SetStatusCode(fasthttp.StatusOK)
 	return nil
 }
 
 func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
-	*batchPtr = (*batchPtr)[:0] // reset
-	batch := batchPtr
+	batch := batchPool.Get().(*[]*model.NoteCreate)
+	*batch = (*batch)[:0]
 
 	for {
 		select {
 		case <-ctx.Done():
-			for {
-				select {
-				case note := <-a.flushChan:
-					*batch = append(*batch, note)
-					if len(*batch) >= a.maxBatch {
-						a.flush(*batch)
-						*batch = (*batch)[:0]
-					}
-				default:
-					if len(*batch) > 0 {
-						a.flush(*batch)
-					}
-					*batch = (*batch)[:0]
-					batchPool.Put(batch)
-					return
-				}
+			if len(*batch) > 0 {
+				a.flush(*batch)
+				*batch = (*batch)[:0]
 			}
+			batchPool.Put(batch)
+			return
 
 		case note := <-a.flushChan:
 			*batch = append(*batch, note)
+
 			if len(*batch) >= a.maxBatch {
 				a.flush(*batch)
 				*batch = (*batch)[:0]
@@ -113,11 +99,14 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (a *apiHandler) flush(notes []*model.NoteCreate) {
+	for i := range notes {
+		notes[i].Id = xid.New().String()
+	}
+
 	a.uc.CreateNotesBatch(notes)
 
 	for _, note := range notes {
-		note.Id = ""
-		note.Title = ""
+		note.Reset()
 		notePool.Put(note)
 	}
 }
