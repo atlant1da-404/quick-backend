@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/atlant1da-404/internal/infra/handler/json"
 	"github.com/dgraph-io/ristretto"
 	"log"
 	"os"
@@ -34,9 +35,11 @@ func main() {
 		BufferItems: 64,
 	})
 
+	sonic := json.NewJSON()
+
 	repo := cache.New(rCache)
 	uc := usecase.NewUsecase(repo)
-	apiHandler := rest.NewAPIHandler(ctx, uc, 2000, 1*time.Millisecond, wg)
+	apiHandler := rest.NewAPIHandler(ctx, sonic, uc, 2000, 1*time.Millisecond, wg)
 
 	http := &fasthttp.Server{
 		Handler: apiHandler.Router,

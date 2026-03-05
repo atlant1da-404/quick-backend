@@ -3,7 +3,6 @@ package rest
 import (
 	"context"
 	"github.com/atlant1da-404/internal/model"
-	"github.com/dgraph-io/ristretto"
 	"sync"
 	"time"
 )
@@ -12,11 +11,16 @@ type (
 	Usecase interface {
 		CreateNotesBatch(notes []*model.NoteCreate)
 	}
+
+	fastJSON interface {
+		Unmarshal(buf []byte, val interface{}) error
+	}
 )
 
 type apiHandler struct {
-	uc        Usecase
-	cache     *ristretto.Cache
+	uc       Usecase
+	fastJSON fastJSON
+
 	flushChan chan *model.NoteCreate
 	maxBatch  int
 	flushDur  time.Duration
@@ -24,6 +28,7 @@ type apiHandler struct {
 
 func NewAPIHandler(
 	ctx context.Context,
+	fastJSON fastJSON,
 	uc Usecase,
 	maxBatch int,
 	flushDur time.Duration,
@@ -32,6 +37,7 @@ func NewAPIHandler(
 
 	h := &apiHandler{
 		uc:        uc,
+		fastJSON:  fastJSON,
 		flushChan: make(chan *model.NoteCreate, 200_000),
 		maxBatch:  maxBatch,
 		flushDur:  flushDur,

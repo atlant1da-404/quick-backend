@@ -5,22 +5,26 @@ import (
 	"github.com/rs/xid"
 	"sync"
 
-	"github.com/bytedance/sonic"
 	"github.com/valyala/fasthttp"
 
 	"github.com/atlant1da-404/internal/model"
 )
 
-const noteRequestLimit = 512
+const (
+	noteRequestLimit = 512
+	batchPoolLenght  = 2000
+)
 
 var (
 	notePool = sync.Pool{
-		New: func() any { return &model.NoteCreate{} },
+		New: func() any {
+			return &model.NoteCreate{}
+		},
 	}
 
 	batchPool = sync.Pool{
 		New: func() any {
-			b := make([]*model.NoteCreate, 0, 2000)
+			b := make([]*model.NoteCreate, 0, batchPoolLenght)
 			return &b
 		},
 	}
@@ -48,7 +52,7 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	req := requestPool.Get().(*createNoteRequestBody)
 	req.Reset()
 
-	if err := sonic.Unmarshal(body, req); err != nil || len(req.Title) == 0 {
+	if err := a.fastJSON.Unmarshal(body, req); err != nil || len(req.Title) == 0 {
 		requestPool.Put(req)
 		ctx.SetStatusCode(fasthttp.StatusBadRequest)
 		return nil
