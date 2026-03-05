@@ -1,16 +1,18 @@
 package model
 
+import "github.com/rs/xid"
+
 type Note struct {
-	Id    string
+	Id    xid.ID
 	Title string
 }
 
 type NoteCreate struct {
-	Id    string
+	Id    xid.ID
 	Title string
 }
 
 func (n *NoteCreate) Reset() {
-	n.Id = ""
+	n.Id = xid.NilID()
 	n.Title = ""
 }

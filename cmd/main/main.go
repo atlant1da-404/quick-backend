@@ -30,9 +30,10 @@ func main() {
 	}
 
 	rCache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: 10_000_000,
-		MaxCost:     256 << 20,
+		NumCounters: 1e7,
+		MaxCost:     1 << 30,
 		BufferItems: 64,
+		Metrics:     false,
 	})
 
 	sonic := json.NewJSON()

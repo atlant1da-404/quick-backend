@@ -107,8 +107,8 @@ func (a *apiHandler) flush(notes []*model.NoteCreate) {
 		return
 	}
 
-	for i := range notes {
-		notes[i].Id = xid.New().String()
+	for i := range notes { // zero allocation in heap
+		notes[i].Id = xid.New()
 	}
 
 	a.uc.CreateNotesBatch(notes)
