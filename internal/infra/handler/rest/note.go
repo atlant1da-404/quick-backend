@@ -85,7 +85,6 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	return nil
 }
 
-// worker обробляє batch без вказівників
 func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	batch := make([]*model.NoteCreate, 0, batchPoolLenght)
