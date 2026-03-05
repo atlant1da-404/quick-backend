@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	noteRequestMin   = 5
 	noteRequestLimit = 512
 	batchPoolLenght  = 2000
 )
@@ -22,16 +23,11 @@ var (
 		},
 	}
 
-	batchPool = sync.Pool{
-		New: func() any {
-			b := make([]*model.NoteCreate, 0, batchPoolLenght)
-			return &b
-		},
-	}
-
 	requestPool = sync.Pool{
 		New: func() any { return &createNoteRequestBody{} },
 	}
+
+	sem = make(chan struct{}, 10000)
 )
 
 type createNoteRequestBody struct {
@@ -43,7 +39,21 @@ func (c *createNoteRequestBody) Reset() {
 }
 
 func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
+	// concurrency rate limiter
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	default:
+		ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
+		return nil
+	}
+
 	body := ctx.Request.Body()
+	if len(body) <= noteRequestMin {
+		ctx.SetStatusCode(fasthttp.StatusBadRequest)
+		return nil
+	}
+
 	if len(body) > noteRequestLimit {
 		ctx.SetStatusCode(fasthttp.StatusRequestEntityTooLarge)
 		return nil
@@ -66,7 +76,7 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	select {
 	case a.flushChan <- note:
 		ctx.SetStatusCode(fasthttp.StatusOK)
-	default:
+	default: // backpressure
 		note.Reset()
 		notePool.Put(note)
 		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
@@ -75,34 +85,34 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	return nil
 }
 
+// worker обробляє batch без вказівників
 func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-
-	batch := batchPool.Get().(*[]*model.NoteCreate)
-	*batch = (*batch)[:0]
+	batch := make([]*model.NoteCreate, 0, batchPoolLenght)
 
 	for {
 		select {
 		case <-ctx.Done():
-			if len(*batch) > 0 {
-				a.flush(*batch)
-				*batch = (*batch)[:0]
+			if len(batch) > 0 {
+				a.flush(batch)
 			}
-			batchPool.Put(batch)
 			return
 
 		case note := <-a.flushChan:
-			*batch = append(*batch, note)
-
-			if len(*batch) >= a.maxBatch {
-				a.flush(*batch)
-				*batch = (*batch)[:0]
+			batch = append(batch, note)
+			if len(batch) >= a.maxBatch {
+				a.flush(batch)
+				batch = batch[:0]
 			}
 		}
 	}
 }
 
 func (a *apiHandler) flush(notes []*model.NoteCreate) {
+	if len(notes) == 0 {
+		return
+	}
+
 	for i := range notes {
 		notes[i].Id = xid.New().String()
 	}
