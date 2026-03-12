@@ -38,10 +38,6 @@ type createNoteRequestBody struct {
 	Title string `json:"title"`
 }
 
-func (c *createNoteRequestBody) Reset() {
-	c.Title = ""
-}
-
 func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	if !a.semaphore.Acquire() {
 		ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
@@ -49,7 +45,7 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	}
 	defer a.semaphore.Release()
 
-	body := ctx.Request.Body()
+	body := ctx.PostBody()
 	if len(body) <= noteRequestMin {
 		ctx.SetStatusCode(fasthttp.StatusBadRequest)
 		return nil
@@ -61,7 +57,7 @@ func (a *apiHandler) CreateNote(ctx *fasthttp.RequestCtx) error {
 	}
 
 	req := requestPool.Get().(*createNoteRequestBody)
-	req.Reset()
+	*req = createNoteRequestBody{}
 
 	if err := a.fastJSON.Unmarshal(body, req); err != nil || len(req.Title) == 0 {
 		requestPool.Put(req)
@@ -91,6 +87,12 @@ func (a *apiHandler) worker(ctx context.Context, wg *sync.WaitGroup) {
 
 	batchPtr := batchPool.Get().(*[]*model.NoteCreate)
 	batch := *batchPtr
+
+	defer func() {
+		batch = batch[:0]
+		*batchPtr = batch
+		batchPool.Put(batchPtr)
+	}()
 
 	for {
 		select {
@@ -124,8 +126,10 @@ func (a *apiHandler) flush(notes []*model.NoteCreate) {
 
 	a.uc.CreateNotesBatch(notes)
 
-	for _, note := range notes {
-		note.Reset()
-		notePool.Put(note)
+	for i := range notes {
+		n := notes[i]
+		*n = model.NoteCreate{} // memclr
+		notePool.Put(n)
+		notes[i] = nil // flush memory
 	}
 }
